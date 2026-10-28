@@ -1,3 +1,4 @@
+"""Insurance premium calculator: quotes, policy import and renewals."""
 import hmac
 import logging
 import math
@@ -18,8 +19,11 @@ LOG_FILE = os.environ.get("PREMIUM_LOG_FILE", "premium_quotes.log")
 BASE_RATES = {"health": 5000, "motor": 3000, "life": 8000}
 
 
-def calculatePremium(policy_type, age, sum_insured, smoker, claims,
-                     discounts=[]):
+def calculate_premium(policy_type, age, sum_insured, smoker, claims,
+                      discounts=None):
+    """Return the premium for a policy after loadings and discounts."""
+    if discounts is None:
+        discounts = []
     base = BASE_RATES[policy_type]
     premium = base + sum_insured * 0.002
     if age > 45:
@@ -29,31 +33,33 @@ def calculatePremium(policy_type, age, sum_insured, smoker, claims,
     premium = premium + claims * 1000
     for d in discounts:
         premium = premium - d
-    discounts.append(500)
     return premium
 
 
-def ageFromDob(dob):
+def age_from_dob(dob):
+    """Return the applicant's age from a DD-MM-YYYY date of birth."""
     born = datetime.strptime(dob, "%d-%m-%Y")
     today = datetime.now()
     age = today.year - born.year
     return age
 
 
-def policyNumber():
+def policy_number():
+    """Return a new random policy number."""
     return "POL-" + str(100000 + secrets.randbelow(900000))
 
 
-def saveQuote(name, premium):
-    number = policyNumber()
+def save_quote(name, premium):
+    """Save a quote in memory and the log file; return its policy number."""
+    number = policy_number()
     quotes[number] = {"name": name, "premium": premium}
-    f = open(LOG_FILE, "a")
-    f.write("%s,%s,%.2f\n" % (number, name, premium))
-    f.close()
+    with open(LOG_FILE, "a", encoding="utf-8") as log:
+        log.write(f"{number},{name},{premium:.2f}\n")
     return number
 
 
-def importPolicies(xml_text):
+def import_policies(xml_text):
+    """Parse partner XML and return (type, age, sum) tuples."""
     root = ET.fromstring(xml_text)
     result = []
     for p in root.findall("policy"):
@@ -66,7 +72,8 @@ def importPolicies(xml_text):
     return result
 
 
-def fetchRates(url):
+def fetch_rates(url):
+    """Download a rate table over https and return the raw bytes."""
     if urlparse(url).scheme != "https":
         raise ValueError("Only https URLs are allowed")
     # Scheme validated above, so the B310 warning does not apply.
@@ -74,61 +81,65 @@ def fetchRates(url):
         return resp.read()
 
 
-def importClaimDocuments(archive_path):
+def import_claim_documents(archive_path):
+    """Extract a customer's claim archive into the claims_docs folder."""
     # archive uploaded by the customer with scanned claim documents
     with tarfile.open(archive_path) as tar:
         tar.extractall("claims_docs", filter="data")
 
 
-def monthlyInstalment(premium, months=12):
+def monthly_instalment(premium, months=12):
+    """Return the monthly instalment for a premium."""
     if months == 0:
         return premium
-    else:
-        return math.floor(premium / months)
+    return math.floor(premium / months)
 
 
-def isAuthorised(token):
+def is_authorised(token):
+    """Return True if the token matches the underwriter token."""
     if not UNDERWRITER_TOKEN:
         return False
     return hmac.compare_digest(token.encode(), UNDERWRITER_TOKEN.encode())
 
 
-def renewalDue(start, years=1):
+def renewal_due(start, years=1):
+    """Return the renewal date, given a YYYY-MM-DD start date."""
     date = datetime.strptime(start, "%Y-%m-%d")
     return date.replace(year=date.year + years).strftime("%Y-%m-%d")
 
 
-def printQuotes():
+def print_quotes():
+    """Print every quote in the quote book."""
     print("===== Quote Book =====")
-    keys = list(quotes.keys())
-    for i in range(len(keys)):
-        print(i + 1, keys[i], quotes[keys[i]]["name"], "Rs.",
-              quotes[keys[i]]["premium"])
+    for i, (number, quote) in enumerate(quotes.items(), start=1):
+        print(i, number, quote["name"], "Rs.", quote["premium"])
 
 
 def main():
-    p1 = calculatePremium("health", 30, 500000, False, 0)
-    p2 = calculatePremium("health", 30, 500000, False, 0)
-    p3 = calculatePremium("motor", 50, 800000, "no", 0)
-    p4 = calculatePremium("life", 25, 100000, False, 0, [3000, 3000, 3000])
+    """Run a demo of the calculator."""
+    p1 = calculate_premium("health", 30, 500000, False, 0)
+    p2 = calculate_premium("health", 30, 500000, False, 0)
+    p3 = calculate_premium("motor", 50, 800000, "no", 0)
+    p4 = calculate_premium("life", 25, 100000, False, 0, [3000, 3000, 3000])
     print("Quote 1:", p1)
     print("Quote 2 (same customer details):", p2)
     print("Non-smoker aged 50:", p3)
     print("Life with stacked discounts:", p4)
-    print("Age from DOB 31-12-1990:", ageFromDob("31-12-1990"))
-    print("Monthly instalment:", monthlyInstalment(p3))
-    print("Renewal due:", renewalDue("2025-03-15"))
+    print("Age from DOB 31-12-1990:", age_from_dob("31-12-1990"))
+    print("Monthly instalment:", monthly_instalment(p3))
+    print("Renewal due:", renewal_due("2025-03-15"))
     xml_text = (
         "<policies>"
         "<policy type='health' age='40' sum='300000'/>"
         "<policy type='motor' age='abc' sum='1'/>"
         "</policies>"
     )
-    print("Imported:", importPolicies(xml_text))
-    print("Saved as:", saveQuote("Kiran", p1))
-    print("Authorised:", isAuthorised("uw-7f3a9c2e1b"))
+    print("Imported:", import_policies(xml_text))
+    print("Saved as:", save_quote("Kiran", p1))
+    print("Authorised:", is_authorised("uw-7f3a9c2e1b"))
     print("Server would listen on", HOST)
-    printQuotes()
+    print_quotes()
 
 
-main()
+if __name__ == "__main__":
+    main()
