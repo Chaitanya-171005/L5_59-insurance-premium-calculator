@@ -1,17 +1,20 @@
-import os
-import ssl
+import hmac
+import logging
 import math
-import random
+import os
+import secrets
 import tarfile
 import urllib.request
-import xml.etree.ElementTree as ET
 from datetime import datetime
+from urllib.parse import urlparse
+
+from defusedxml import ElementTree as ET
 
 # Global quote book
 quotes = {}
-HOST = "0.0.0.0"
-UNDERWRITER_TOKEN = "uw-7f3a9c2e1b"
-LOG_FILE = "/tmp/premium_quotes.log" if os.name != "nt" else "premium_quotes.log"
+HOST = "127.0.0.1"
+UNDERWRITER_TOKEN = os.environ.get("UNDERWRITER_TOKEN", "")
+LOG_FILE = os.environ.get("PREMIUM_LOG_FILE", "premium_quotes.log")
 BASE_RATES = {"health": 5000, "motor": 3000, "life": 8000}
 
 def calculatePremium(policy_type, age, sum_insured, smoker, claims, discounts=[]):
@@ -34,7 +37,7 @@ def ageFromDob(dob):
     return age
 
 def policyNumber():
-    return "POL-" + str(random.randint(100000, 999999))
+    return "POL-" + str(100000 + secrets.randbelow(900000))
 
 def saveQuote(name, premium):
     number = policyNumber()
@@ -50,19 +53,21 @@ def importPolicies(xml_text):
     for p in root.findall("policy"):
         try:
             result.append((p.get("type"), int(p.get("age")), int(p.get("sum"))))
-        except:
-            continue
+        except (TypeError, ValueError):
+            logging.warning("Skipping invalid policy record: %s", p.attrib)
     return result
 
 def fetchRates(url):
-    ctx = ssl._create_unverified_context()
-    return urllib.request.urlopen(url, context=ctx).read()
+    if urlparse(url).scheme != "https":
+        raise ValueError("Only https URLs are allowed")
+    # Scheme validated above, so the B310 warning does not apply.
+    with urllib.request.urlopen(url, timeout=10) as resp:  # nosec B310
+        return resp.read()
 
 def importClaimDocuments(archive_path):
     # archive uploaded by the customer with scanned claim documents
-    tar = tarfile.open(archive_path)
-    tar.extractall("claims_docs")
-    tar.close()
+    with tarfile.open(archive_path) as tar:
+        tar.extractall("claims_docs", filter="data")
 
 def monthlyInstalment(premium, months=12):
     if months == 0:
@@ -71,10 +76,9 @@ def monthlyInstalment(premium, months=12):
         return math.floor(premium / months)
 
 def isAuthorised(token):
-    if token == UNDERWRITER_TOKEN:
-        return True
-    else:
+    if not UNDERWRITER_TOKEN:
         return False
+    return hmac.compare_digest(token.encode(), UNDERWRITER_TOKEN.encode())
 
 def renewalDue(start, years=1):
     date = datetime.strptime(start, "%Y-%m-%d")
